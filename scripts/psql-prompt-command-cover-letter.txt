@@ -1,0 +1,101 @@
+To: pgsql-hackers@postgresql.org
+Cc: pgsql-committers@postgresql.org
+Subject: [PATCH] Add PROMPT_COMMAND and dynamic prompt support to psql
+From: Kirk Roybal <kirk.roybal@gmail.com>
+
+Hi,
+
+This patch adds optional, bash-like dynamic prompt support to psql so the
+interactive prompt can be regenerated before each readline() call.  The
+motivation is to let users plug in external prompt renderers (status lines,
+connection context, last-command exit status) without forking psql.
+
+Summary
+-------
+
+* PROMPT_COMMAND — if set, run a shell command before each interactive prompt;
+  capture the first line of stdout (truncated to the existing prompt buffer
+  limit).
+
+* %D — new PROMPT1/PROMPT2 escape; substitute the most recent PROMPT_COMMAND
+  stdout.  Intended for embedding renderer output in the prompt string.
+
+* SHELL_EXIT — new psql variable holding the exit status of the last user
+  command: 0 on success, 1 on SQL failure, or the real exit code for \! and
+  similar shell invocations.  PROMPT_COMMAND does not update SHELL_EXIT, so
+  renderers can reflect the prior command's outcome.
+
+* PROMPT_SESSION_EXPORT — new boolean psql variable, off by default.  When on,
+  export current-session PG* and PSQL_* environment variables to the
+  PROMPT_COMMAND subprocess (connection target, transaction state, row count,
+  PostgreSQL superuser flag, optional txid from a user-defined :txid variable).
+  This is separate from PROMPT_COMMAND so users who only need %D without
+  touching the subprocess environment can leave it off.
+
+* Prompt refresh — call run_prompt_command() immediately before readline() in
+  input.c (replacing an rl_pre_input_hook approach that left the prompt blank
+  until the first keypress).
+
+* \connect housekeeping — after a successful \connect, reset ROW_COUNT and
+  SHELL_EXIT and optionally refresh :txid when that variable exists.
+
+Backward compatibility
+----------------------
+
+No behavior change unless the user configures the new facilities in .psqlrc
+(or equivalent).  PROMPT_COMMAND, %D, and PROMPT_SESSION_EXPORT are all inert
+until set.  Existing scripts and non-interactive use are unaffected.
+
+I am happy to rename variables, change defaults, add further gating, or split
+the patch if reviewers prefer a narrower initial commit.
+
+Testing
+-------
+
+Manual testing on Linux with readline:
+
+* PROMPT_COMMAND + %D rendering before each prompt
+* \c with spaces preserved in readline (e.g. \c postgres)
+* SHELL_EXIT after successful SQL, failed SQL, and \!
+* PROMPT_SESSION_EXPORT on/off
+* \connect reset of ROW_COUNT / SHELL_EXIT and txid refresh
+
+I have not added a TAP test yet; I can add coverage in src/bin/psql/t/ if
+that is desired before commit.
+
+Companion work (not part of this patch)
+---------------------------------------
+
+A reference implementation for the Powerline prompt utility is maintained
+separately:
+
+  https://github.com/powerline/powerline/pull/2287
+
+Integration notes for that companion (example .psqlrc, exported variables,
+readline marker requirements) are in the patch as:
+
+  src/bin/psql/powerline-integration.md
+
+That file is documentation only and is not installed.  The two projects can
+be adopted independently; full functionality requires both plus user config.
+
+References
+----------
+
+Fork branch (for convenience):
+
+  https://github.com/bithead2k/postgres/tree/psql-prompt-command
+
+Tracking PR on the mirror (not upstream merge):
+
+  https://github.com/bithead2k/postgres/pull/1
+
+Patch is attached (git format-patch output).  A screenshot of the companion
+powerline prompt in use is also attached as powerline-prompt-example.png and
+checked in as src/bin/psql/powerline-prompt-example.png (see
+powerline-integration.md).
+
+Comments welcome.
+
+Regards,
+Kirk Roybal
